@@ -48,7 +48,11 @@ data/new/ → Pipeline (Prefect) → Train (sklearn) → MLflow (versioning)
 
 - **Python 3.9+**
 - **Git** (for version control)
+- **Initial data file**: `data/house_prices.csv` (required for training)
 - **DVC** (optional, for data versioning)
+
+### ⚠️ Important
+MLflow **must be running before** the pipeline starts training. Otherwise, models won't be logged.
 
 ---
 
@@ -76,44 +80,31 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Initialize DVC (Optional)
-```bash
-dvc init
-dvc remote add -d storage <your-s3-bucket>  # Optional: use S3/GCS for remote storage
-```
-
----
-
-## ⚙️ Configuration
-
-### Key Paths (in `pipeline.py` and `train.py`):
-```python
-MAIN_DATA_PATH = Path("data/house_prices.csv")       # Main training data
-INCOMING_DIR = Path("data/new")                      # New data folder (pipeline watches this)
-PROCESSED_DIR = INCOMING_DIR / "processed"           # Processed data archive
-MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"        # MLflow server
-REGISTERED_MODEL_NAME = "house_price_model"          # Model registry name
-```
-
-### Model Configuration (in `train.py`):
-```python
-TEST_SIZE = 0.20                # 80-20 train-test split
-RANDOM_STATE = 42               # Reproducibility
-```
-
-### API Configuration (in `app.py`):
-```python
-REFRESH_INTERVAL_SECONDS = 10   # Check MLflow every 10 seconds for new models
-```
-
-### Deployment Configuration (in `deploy.py`):
-```python
-interval=30  # Pipeline runs every 30 seconds
-```
-
 ---
 
 ## 🔧 Running the Project
+
+### Quick Start (Manual Mode - No Automation)
+If you just want to test without automatic 30-second scheduling:
+
+**Terminal 1:**
+```bash
+mlflow server --host 127.0.0.1 --port 5000
+```
+
+**Terminal 2:**
+```bash
+uvicorn src.app:app --reload --port 8000
+```
+
+**Terminal 3 (whenever you want to retrain):**
+```bash
+python src/pipeline.py
+```
+
+---
+
+### Full Setup (With Automation - 30 Second Scheduling)
 
 ### Step 1: Start MLflow Server (Terminal 1)
 ```bash
@@ -128,23 +119,14 @@ prefect server start
 Access at: `http://127.0.0.1:4200`
 
 ### Step 3: Start Prefect Worker (Terminal 3)
+**Mandatory** — executes scheduled pipeline runs automatically.
 ```bash
-# Windows
-$env:PREFECT_API_URL = "http://127.0.0.1:4200/api"
-prefect worker start --pool 'default'
-
-# macOS/Linux
-export PREFECT_API_URL="http://127.0.0.1:4200/api"
 prefect worker start --pool 'default'
 ```
 
 ### Step 4: Register Prefect Deployment (Terminal 4)
 ```bash
 python src/deploy.py
-```
-Output should show:
-```
-Your flow 'house-price-mlops-pipeline' is being served and polling for scheduled runs!
 ```
 
 ### Step 5: Start FastAPI Server (Terminal 5)
@@ -153,7 +135,10 @@ uvicorn src.app:app --reload --port 8000
 ```
 Access API docs at: `http://127.0.0.1:8000/docs`
 
-### Step 6: Add Data to Trigger Pipeline
+### Step 6: Verify Initial Data Exists
+Make sure `data/house_prices.csv` exists (initial training data). If not, create it from a sample dataset.
+
+### Step 7: Add New Data to Trigger Pipeline
 Place new CSV files in `data/new/`:
 ```bash
 cp house_prices_v4_dataset.csv data/new/
@@ -339,5 +324,3 @@ dvc push  # Push to remote storage
 git add data/house_prices.csv.dvc
 git commit -m "Add data"
 ```
-
----
