@@ -16,6 +16,7 @@ MODEL_PATH = "models/house_price_model.joblib"
 TARGET_COLUMN = "price_lakhs"
 TEST_SIZE = 0.20
 RANDOM_STATE = 42
+REGISTERED_MODEL_NAME = "house_price_model"
 
 
 def build_preprocessor(X):
@@ -75,9 +76,11 @@ def main():
         mlflow.log_metric("mae", mae)
         mlflow.log_metric("rmse", rmse)
         mlflow.log_metric("r2", r2)
-        mlflow.sklearn.log_model(
+
+        model_info = mlflow.sklearn.log_model(
             model, "model",
             serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_PICKLE,
+            registered_model_name=REGISTERED_MODEL_NAME,
         )
 
         joblib.dump(model, MODEL_PATH)
@@ -87,6 +90,12 @@ def main():
         print(f"RMSE: {rmse:.4f}")
         print(f"R2: {r2:.4f}")
         print(f"Saved model to: {MODEL_PATH}")
+
+        return {
+            "run_id": run.info.run_id,
+            "mae": mae,
+            "model_version": model_info.registered_model_version,
+        }
 
 
 if __name__ == "__main__":

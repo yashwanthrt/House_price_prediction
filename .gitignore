@@ -7,3 +7,4 @@ mlruns/
 models/*.joblib
 dvc_storage/
 .DS_Store
+data/new/processed/
