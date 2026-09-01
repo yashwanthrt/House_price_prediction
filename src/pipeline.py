@@ -1,95 +1,95 @@
-import asyncio
-import contextlib
+from pathlib import Path
 
 import mlflow
 import pandas as pd
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from prefect import flow, task
+from train import main as train_model
 
+MAIN_DATA_PATH = Path("data/house_prices.csv")
+INCOMING_DIR = Path("data/new")
+PROCESSED_DIR = INCOMING_DIR / "processed"
 REGISTERED_MODEL_NAME = "house_price_model"
 MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
-REFRESH_INTERVAL_SECONDS = 10  # matches the 10-minute retrain schedule
-
-app = FastAPI(
-    title="House Price Prediction API",
-    version="1.0.0"
-)
-
-model = None
-_model_version_info = None
-_refresh_task = None
 
 
-class HouseFeatures(BaseModel):
-    area: float = Field(..., gt=0)
-    bedrooms: int = Field(..., ge=0)
-    city: str
-    furnishing: str | None = None
-    locality_tier: str | None = None
+@task
+def find_new_files() -> list[Path]:
+    if not INCOMING_DIR.exists():
+        return []
+    return sorted(
+        f for f in INCOMING_DIR.glob("*.csv")
+        if f.is_file()
+    )
 
 
-def _load_production_model():
-    global model, _model_version_info
-    client = mlflow.MlflowClient()
-    version_info = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, "production")
+@task
+def merge_new_data(new_files: list[Path]):
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Only reload the actual model object if the production version changed
-    if _model_version_info is None or version_info.version != _model_version_info.version:
-        model = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL_NAME}@production")
-        print(f"Loaded production model version {version_info.version}")
+    main_df = pd.read_csv(MAIN_DATA_PATH) if MAIN_DATA_PATH.exists() else pd.DataFrame()
 
-    _model_version_info = version_info
+    for f in new_files:
+        incoming_df = pd.read_csv(f)
+        main_df = pd.concat([main_df, incoming_df], ignore_index=True)
+        f.rename(PROCESSED_DIR / f.name)
+        print(f"Merged and archived: {f.name}")
 
-
-async def _refresh_loop():
-    while True:
-        await asyncio.sleep(REFRESH_INTERVAL_SECONDS)
-        try:
-            _load_production_model()
-        except Exception as e:
-            print(f"Model refresh failed: {e}")
+    main_df.to_csv(MAIN_DATA_PATH, index=False)
+    print(f"Updated {MAIN_DATA_PATH} -- now {len(main_df)} rows.")
 
 
-@app.on_event("startup")
-def load_model():
+@task(retries=2, retry_delay_seconds=10)
+def run_training() -> dict:
+    return train_model()
+
+
+@task
+def promote_if_better(training_result: dict):
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    _load_production_model()
+    client = mlflow.MlflowClient()
 
-    global _refresh_task
-    _refresh_task = asyncio.create_task(_refresh_loop())
+    new_version = training_result["model_version"]
+    new_mae = training_result["mae"]
+
+    try:
+        current_prod = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, "production")
+        current_run = mlflow.get_run(current_prod.run_id)
+        current_mae = current_run.data.metrics.get("mae")
+    except Exception:
+        current_prod = None
+        current_mae = None
+
+    if current_prod is None:
+        print(f"No current production model -- promoting version {new_version} (MAE={new_mae:.4f})")
+        client.set_registered_model_alias(REGISTERED_MODEL_NAME, "production", new_version)
+        return
+
+    if new_mae < current_mae:
+        print(
+            f"New version {new_version} (MAE={new_mae:.4f}) beats "
+            f"current production version {current_prod.version} (MAE={current_mae:.4f}) -- promoting."
+        )
+        client.set_registered_model_alias(REGISTERED_MODEL_NAME, "production", new_version)
+    else:
+        print(
+            f"New version {new_version} (MAE={new_mae:.4f}) did not beat "
+            f"current production version {current_prod.version} (MAE={current_mae:.4f}) -- keeping current."
+        )
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    if _refresh_task:
-        _refresh_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await _refresh_task
+@flow(name="house-price-mlops-pipeline")
+def house_price_pipeline():
+    new_files = find_new_files()
+
+    if not new_files:
+        print("No new files in data/new/ -- skipping retrain.")
+        return
+
+    print(f"Found {len(new_files)} new file(s) -- merging and retraining.")
+    merge_new_data(new_files)
+    result = run_training()
+    promote_if_better(result)
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.get("/model-info")
-def model_info():
-    return {
-        "model_name": REGISTERED_MODEL_NAME,
-        "version": _model_version_info.version,
-        "alias": "production",
-        "run_id": _model_version_info.run_id,
-    }
-
-
-@app.post("/predict")
-def predict(features: HouseFeatures):
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model is not loaded")
-
-    row = pd.DataFrame([features.model_dump()])
-    prediction = float(model.predict(row)[0])
-
-    return {
-        "predicted_price_lakhs": round(prediction, 4)
-    }
+if __name__ == "__main__":
+    house_price_pipeline()
