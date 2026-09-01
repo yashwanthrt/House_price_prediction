@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+mlruns/
+models/*.joblib
+dvc_storage/
+.DS_Store
