@@ -4,20 +4,6 @@ A production-ready MLOps pipeline for house price prediction using **Prefect** f
 
 ---
 
-## 📋 Table of Contents
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Running the Project](#running-the-project)
-- [Project Structure](#project-structure)
-- [API Endpoints](#api-endpoints)
-- [Workflow](#workflow)
-- [Troubleshooting](#troubleshooting)
-
----
-
 ## 🎯 Overview
 
 This project predicts house prices based on features like area, bedrooms, city, furnishing, and locality tier. It implements **continuous retraining** with automatic model promotion:
@@ -355,22 +341,3 @@ git commit -m "Add data"
 ```
 
 ---
-
-## 📈 Next Steps
-
-1. **Fine-tune model**: Modify hyperparameters in `train.py`
-2. **Add features**: Engineer new features for better predictions
-3. **Deploy to cloud**: Use GitHub Actions to auto-deploy to AWS/GCP/Azure
-4. **Set up monitoring**: Add alerts for model drift or prediction anomalies
-5. **A/B testing**: Deploy multiple models side-by-side
-
----
-
-## 📝 License
-MIT
-
----
-
-## 👤 Author
-T Yashwanth Reddy  
-Automation Engineer Intern @ Avowal Data Systems
