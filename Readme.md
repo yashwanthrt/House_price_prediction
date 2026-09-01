@@ -1,0 +1,376 @@
+# House Price Prediction - MLOps Pipeline
+
+A production-ready MLOps pipeline for house price prediction using **Prefect** for orchestration, **MLflow** for model tracking, **DVC** for data versioning, and **FastAPI** for serving predictions.
+
+---
+
+## 📋 Table of Contents
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Running the Project](#running-the-project)
+- [Project Structure](#project-structure)
+- [API Endpoints](#api-endpoints)
+- [Workflow](#workflow)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## 🎯 Overview
+
+This project predicts house prices based on features like area, bedrooms, city, furnishing, and locality tier. It implements **continuous retraining** with automatic model promotion:
+
+- **Automated Training**: Pipeline runs every 30 seconds, detects new data, retrains model
+- **Auto Model Promotion**: Only promotes if new model's MAE is better than production
+- **Model Versioning**: All versions tracked in MLflow with rollback capability
+- **Data Versioning**: DVC tracks historical datasets
+- **API Serving**: FastAPI serves predictions with automatic model reloading every 10 seconds
+- **Containerized**: Docker support for deployment
+
+---
+
+## 🏗️ Architecture
+
+```
+data/new/ → Pipeline (Prefect) → Train (sklearn) → MLflow (versioning)
+                ↓
+           Merge Data
+                ↓
+           Compare MAE
+                ↓
+         Production Model
+                ↓
+         API (FastAPI)
+                ↓
+         Predictions
+```
+
+### Components:
+- **`pipeline.py`**: Orchestrates data merging, training, model promotion (Prefect flows/tasks)
+- **`train.py`**: Trains LinearRegression model with sklearn preprocessing
+- **`deploy.py`**: Registers Prefect deployment (30-second schedule)
+- **`app.py`**: FastAPI server for predictions, auto-reloads model every 10 seconds
+- **`rollback.py`**: Manually revert to previous model versions
+- **`dvc.yaml`**: DVC pipeline definition for reproducibility
+- **`mlflow.db`**: MLflow metadata store (run info, metrics, version aliases)
+
+---
+
+## 📦 Prerequisites
+
+- **Python 3.9+**
+- **Git** (for version control)
+- **DVC** (optional, for data versioning)
+
+---
+
+## 🚀 Installation
+
+### 1. Clone Repository
+```bash
+git clone <repo-url>
+cd House_price_pred
+```
+
+### 2. Create Virtual Environment
+```bash
+# Windows
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+
+# macOS/Linux
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 3. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Initialize DVC (Optional)
+```bash
+dvc init
+dvc remote add -d storage <your-s3-bucket>  # Optional: use S3/GCS for remote storage
+```
+
+---
+
+## ⚙️ Configuration
+
+### Key Paths (in `pipeline.py` and `train.py`):
+```python
+MAIN_DATA_PATH = Path("data/house_prices.csv")       # Main training data
+INCOMING_DIR = Path("data/new")                      # New data folder (pipeline watches this)
+PROCESSED_DIR = INCOMING_DIR / "processed"           # Processed data archive
+MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"        # MLflow server
+REGISTERED_MODEL_NAME = "house_price_model"          # Model registry name
+```
+
+### Model Configuration (in `train.py`):
+```python
+TEST_SIZE = 0.20                # 80-20 train-test split
+RANDOM_STATE = 42               # Reproducibility
+```
+
+### API Configuration (in `app.py`):
+```python
+REFRESH_INTERVAL_SECONDS = 10   # Check MLflow every 10 seconds for new models
+```
+
+### Deployment Configuration (in `deploy.py`):
+```python
+interval=30  # Pipeline runs every 30 seconds
+```
+
+---
+
+## 🔧 Running the Project
+
+### Step 1: Start MLflow Server (Terminal 1)
+```bash
+mlflow server --host 127.0.0.1 --port 5000
+```
+Access at: `http://127.0.0.1:5000`
+
+### Step 2: Start Prefect Server (Terminal 2)
+```bash
+prefect server start
+```
+Access at: `http://127.0.0.1:4200`
+
+### Step 3: Start Prefect Worker (Terminal 3)
+```bash
+# Windows
+$env:PREFECT_API_URL = "http://127.0.0.1:4200/api"
+prefect worker start --pool 'default'
+
+# macOS/Linux
+export PREFECT_API_URL="http://127.0.0.1:4200/api"
+prefect worker start --pool 'default'
+```
+
+### Step 4: Register Prefect Deployment (Terminal 4)
+```bash
+python src/deploy.py
+```
+Output should show:
+```
+Your flow 'house-price-mlops-pipeline' is being served and polling for scheduled runs!
+```
+
+### Step 5: Start FastAPI Server (Terminal 5)
+```bash
+uvicorn src.app:app --reload --port 8000
+```
+Access API docs at: `http://127.0.0.1:8000/docs`
+
+### Step 6: Add Data to Trigger Pipeline
+Place new CSV files in `data/new/`:
+```bash
+cp house_prices_v4_dataset.csv data/new/
+```
+
+Pipeline auto-triggers in 30 seconds → trains → promotes if MAE improves → updates production model.
+
+---
+
+## 📁 Project Structure
+
+```
+House_price_pred/
+├── src/
+│   ├── train.py           # Model training script
+│   ├── pipeline.py        # Prefect orchestration
+│   ├── deploy.py          # Deployment scheduling
+│   ├── app.py             # FastAPI server
+│   └── rollback.py        # Manual rollback utility
+├── data/
+│   ├── house_prices.csv   # Main training data
+│   └── new/               # New data for retraining (pipeline watches this)
+│       └── processed/     # Archived after processing
+├── models/
+│   └── house_price_model.joblib  # Trained model (joblib)
+├── mlruns/                # MLflow experiment artifacts
+├── requirements.txt       # Python dependencies
+├── dvc.yaml              # DVC pipeline config
+├── dvc.lock              # DVC lock file
+├── .gitignore            # Git ignore
+├── .dvcignore            # DVC ignore
+├── .dockerignore         # Docker ignore
+├── Dockerfile            # Container definition
+└── README.md             # This file
+```
+
+---
+
+## 🔌 API Endpoints
+
+### `/health` (GET)
+Health check endpoint.
+```bash
+curl http://127.0.0.1:8000/health
+```
+Response:
+```json
+{"status": "ok"}
+```
+
+### `/model-info` (GET)
+Get current production model info.
+```bash
+curl http://127.0.0.1:8000/model-info
+```
+Response:
+```json
+{
+  "model_name": "house_price_model",
+  "version": 3,
+  "alias": "production",
+  "run_id": "abc123def456"
+}
+```
+
+### `/predict` (POST)
+Predict house price.
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "area": 1500,
+    "bedrooms": 3,
+    "city": "Bangalore",
+    "furnishing": "Semi-Furnished",
+    "locality_tier": "2"
+  }'
+```
+Response:
+```json
+{"predicted_price_lakhs": 156.42}
+```
+
+---
+
+## 🔄 Workflow
+
+### 1. **Data Ingestion**
+   - Place new CSV files in `data/new/`
+   - Files must have columns: `area`, `bedrooms`, `city`, `furnishing`, `locality_tier`, `price_lakhs`
+
+### 2. **Automatic Pipeline Trigger (Every 30 seconds)**
+   - Prefect worker detects scheduled run
+   - `find_new_files()` scans `data/new/`
+   - `merge_new_data()` concatenates with main dataset, archives source
+   - `run_training()` trains LinearRegression model on merged data
+   - Logs metrics (MAE, RMSE, R²) to MLflow
+
+### 3. **Model Promotion**
+   - `promote_if_better()` compares new model's MAE against production
+   - If `new_mae < current_production_mae`: promotes new version to production alias
+   - If not: keeps current production model
+
+### 4. **API Updates**
+   - Every 10 seconds, API checks MLflow for new production version
+   - If version changed, reloads model automatically
+   - Serves predictions using latest production model
+
+### 5. **Manual Rollback (Optional)**
+   ```bash
+   python src/rollback.py 2  # Rollback to version 2
+   ```
+   API reloads version 2 on next refresh cycle (10 seconds).
+
+---
+
+## 📊 Monitoring
+
+### MLflow UI
+- View all training runs, metrics, model versions
+- Compare model performance across versions
+- Check production model alias
+
+### Prefect UI
+- Monitor pipeline execution history
+- View task logs and flow runs
+- Reschedule or trigger manual runs
+
+### API Logs
+- Check terminal where `uvicorn` is running for request logs
+
+---
+
+## 🐳 Docker Deployment (Optional)
+
+### Build Image
+```bash
+docker build -t house-price-api .
+```
+
+### Run Container
+```bash
+docker run -p 8000:8000 \
+  -e MLFLOW_TRACKING_URI="http://host.docker.internal:5000" \
+  house-price-api
+```
+
+---
+
+## ❌ Troubleshooting
+
+### Issue: "Deployment not found"
+**Solution**: Run `python src/deploy.py` to register deployment.
+
+### Issue: Pipeline not triggering automatically
+**Solution**: 
+- Confirm Prefect server is running: `prefect server start`
+- Confirm worker is running with correct API URL
+- Check worker logs for errors
+
+### Issue: Model not being promoted
+**Solution**: 
+- Check MLflow for new model's MAE
+- If MAE is higher than production, it won't promote (this is correct behavior)
+- Generate better training data or adjust model parameters
+
+### Issue: API returns 503 "Model not loaded"
+**Solution**: 
+- Ensure MLflow server is running
+- Check MLflow has a model with "production" alias
+- Check API logs for detailed error
+
+### Issue: Import error in `pipeline.py`
+**Solution**: 
+- Ensure you're running from project root
+- Check `PYTHONPATH`: `set PYTHONPATH=%cd%` (Windows) or `export PYTHONPATH=.` (Linux)
+
+### Issue: DVC not tracking data
+**Solution**: 
+```bash
+dvc add data/house_prices.csv
+dvc push  # Push to remote storage
+git add data/house_prices.csv.dvc
+git commit -m "Add data"
+```
+
+---
+
+## 📈 Next Steps
+
+1. **Fine-tune model**: Modify hyperparameters in `train.py`
+2. **Add features**: Engineer new features for better predictions
+3. **Deploy to cloud**: Use GitHub Actions to auto-deploy to AWS/GCP/Azure
+4. **Set up monitoring**: Add alerts for model drift or prediction anomalies
+5. **A/B testing**: Deploy multiple models side-by-side
+
+---
+
+## 📝 License
+MIT
+
+---
+
+## 👤 Author
+T Yashwanth Reddy  
+Automation Engineer Intern @ Avowal Data Systems
